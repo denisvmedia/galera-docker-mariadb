@@ -10,6 +10,14 @@ CLUSTER_NAME=$3
 TTL=$4
 ETCD_HOSTS=$5
 
+if [ -z "$ETCD_SSL_CLIENT_CERT" ]; then
+    curl_cmd="curl -s"
+    etcd_transport="http"
+else
+    curl_cmd="curl --cacert /etc/etcd/ssl/etcd-root-ca.pem --cert /etc/etcd/ssl/galera.pem --key /etc/etcd/ssl/galera-key.pem"
+    etcd_transport="https"
+fi
+
 function check_etcd()
 {
   etcd_hosts=$(echo $ETCD_HOSTS | tr ',' ' ')
@@ -18,8 +26,8 @@ function check_etcd()
   # Loop to find a healthy etcd host
   for i in $etcd_hosts
   do
-    curl -s http://$i/health > /dev/null || continue
-    if curl -s http://$i/health | jq -e 'contains({ "health": "true"})' > /dev/null; then
+    $curl_cmd $etcd_transport://$i/health > /dev/null || continue
+    if $curl_cmd $etcd_transport://$i/health | jq -e 'contains({ "health": "true"})' > /dev/null; then
       healthy_etcd=$i
       flag=0
       break
@@ -38,7 +46,7 @@ function report_status()
   if [ ! -z $var ]; then
     check_etcd
     
-    URL="http://$healthy_etcd/v2/keys/galera/$CLUSTER_NAME"
+    URL="$etcd_transport://$healthy_etcd/v2/keys/galera/$CLUSTER_NAME"
     output=$(mysql --user=$USER --password=$PASSWORD -A -Bse "show status like '$var'" 2> /dev/null)
     if [ -z $key ]; then
       key=$(echo $output | awk {'print $1'})
@@ -47,7 +55,7 @@ function report_status()
     ipaddr=$(hostname -i | awk {'print $1'})
 
     if [ ! -z $value ]; then
-      curl -s $URL/$ipaddr/$key -X PUT -d "value=$value&ttl=$TTL" > /dev/null
+      $curl_cmd $URL/$ipaddr/$key -X PUT -d "value=$value&ttl=$TTL" > /dev/null
     fi
   fi
   

@@ -109,6 +109,14 @@ if [ -z "$DISCOVERY_SERVICE" ]; then
 else
 	echo
 	echo '>> Registering in the discovery service'
+    
+    if [ -z "$ETCD_SSL_CLIENT_CERT" ]; then
+        curl_cmd="curl -s"
+        etcd_transport="http"
+    else
+        curl_cmd="curl --cacert /etc/etcd/ssl/etcd-root-ca.pem --cert /etc/etcd/ssl/galera.pem --key /etc/etcd/ssl/galera-key.pem"
+        etcd_transport="https"
+    fi
 
 	etcd_hosts=$(echo $DISCOVERY_SERVICE | tr ',' ' ')
 	flag=1
@@ -117,9 +125,9 @@ else
 	# Loop to find a healthy etcd host
 	for i in $etcd_hosts
 	do
-		echo ">> Connecting to http://${i}/health"
-		curl -s http://${i}/health || continue
-		if curl -s http://$i/health | jq -e 'contains({ "health": "true"})'; then
+		echo ">> Connecting to $etcd_transport://${i}/health"
+		$curl_cmd $etcd_transport://${i}/health || continue
+		if $curl_cmd $etcd_transport://$i/health | jq -e 'contains({ "health": "true"})'; then
 			healthy_etcd=$i
 			flag=0
 			break
@@ -138,7 +146,7 @@ else
 	echo ">> Selected healthy etcd: $healthy_etcd"
 
   if [ ! -z "$healthy_etcd" ]; then
-    URL="http://$healthy_etcd/v2/keys/galera/$CLUSTER_NAME"
+    URL="$etcd_transport://$healthy_etcd/v2/keys/galera/$CLUSTER_NAME"
 
     set +e
     echo >&2 ">> Waiting for $TTL seconds to read non-expired keys.."
@@ -146,7 +154,7 @@ else
 
     # Read the list of registered IP addresses
     echo >&2 ">> Retrieving list of keys for $CLUSTER_NAME"
-    addr=$(curl -s $URL | jq -r '.node.nodes[]?.key' | awk -F'/' '{print $(NF)}')
+    addr=$($curl_cmd $URL | jq -r '.node.nodes[]?.key' | awk -F'/' '{print $(NF)}')
     cluster_join=$(join , $addr)
 
     ipaddr=$(hostname -i | awk {'print $1'})
@@ -156,10 +164,10 @@ else
     if [ -z $cluster_join ]; then
       echo >&2 ">> KV store is empty. This is a the first node to come up."
       echo
-      echo >&2 ">> Registering $ipaddr in http://$healthy_etcd"
-      curl -s $URL/$ipaddr/ipaddress -X PUT -d "value=$ipaddr"
+      echo >&2 ">> Registering $ipaddr in $etcd_transport://$healthy_etcd"
+      $curl_cmd $URL/$ipaddr/ipaddress -X PUT -d "value=$ipaddr"
     else
-      curl -s ${URL}?recursive=true\&sorted=true > /tmp/out
+      $curl_cmd ${URL}?recursive=true\&sorted=true > /tmp/out
       running_nodes=$(cat /tmp/out | jq -r '.node.nodes[].nodes[]? | select(.key | contains ("wsrep_local_state_comment")) | select(.value == "Synced") | .key' | awk -F'/' '{print $(NF-1)}' | tr "\n" ' '| sed -e 's/[[:space:]]*$//')
       echo
       echo ">> Running nodes: [${running_nodes}]"
@@ -185,7 +193,7 @@ else
         if [ ! -z $seqno ]; then
           echo >&2 ">> Reporting seqno:$seqno to ${healthy_etcd}."
           WAIT=$(($TTL * 2))
-          curl -s $URL/$ipaddr/seqno -X PUT -d "value=$seqno&ttl=$WAIT"
+          $curl_cmd $URL/$ipaddr/seqno -X PUT -d "value=$seqno&ttl=$WAIT"
         else
           seqno=$(cat $TMP | tr ' ' "\n" | grep -e '[a-z0-9]*-[a-z0-9]*:[0-9]' | head -1)
           echo >&2 ">> Unable to determine Galera sequence number."
@@ -202,7 +210,7 @@ else
         bootstrap_flag=1
 
         # Retrieve seqno from etcd
-        curl -s ${URL}?recursive=true\&sorted=true > /tmp/out
+        $curl_cmd ${URL}?recursive=true\&sorted=true > /tmp/out
         cluster_seqno=$(cat /tmp/out | jq -r '.node.nodes[].nodes[]? | select(.key | contains ("seqno")) | .value' | tr "\n" ' '| sed -e 's/[[:space:]]*$//')
 
         for i in $cluster_seqno; do
@@ -225,7 +233,7 @@ else
             echo >&2 ">> Based on timestamp, $node_to_bootstrap is the chosen node to bootstrap."
             echo >&2 ">> Wait again for $TTL seconds to look for a bootstrapped node."
             sleep $TTL
-            curl -s ${URL}?recursive=true\&sorted=true > /tmp/out
+            $curl_cmd ${URL}?recursive=true\&sorted=true > /tmp/out
 
             # Look for a synced node again
             running_nodes2=$(cat /tmp/out | jq -r '.node.nodes[].nodes[]? | select(.key | contains ("wsrep_local_state_comment")) | select(.value == "Synced") | .key' | awk -F'/' '{print $(NF-1)}' | tr "\n" ' '| sed -e 's/[[:space:]]*$//')
@@ -248,7 +256,7 @@ else
           sleep $TTL
 
           # Look for a synced node again
-          curl -s ${URL}?recursive=true\&sorted=true > /tmp/out
+          $curl_cmd ${URL}?recursive=true\&sorted=true > /tmp/out
           running_nodes3=$(cat /tmp/out | jq -r '.node.nodes[].nodes[]? | select(.key | contains ("wsrep_local_state_comment")) | select(.value == "Synced") | .key' | awk -F'/' '{print $(NF-1)}' | tr "\n" ' '| sed -e 's/[[:space:]]*$//')
 
           echo

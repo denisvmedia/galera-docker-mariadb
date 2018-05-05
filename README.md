@@ -188,6 +188,15 @@ Verify with:
 $ docker ps
 ```
 
+### Etcd SSL Client Certificate ###
+
+If you have your Etcd cluster set up to require ssl client certificate authentication, you should set environment variable `ETCD_SSL_CLIENT_CERT=1` and add the following files to the container:
+
+```
+/etc/etcd/ssl/etcd-root-ca.pem
+/etc/etcd/ssl/galera.pem 
+/etc/etcd/ssl/galera-key.pem
+```
 
 ## Build Image ##
 
